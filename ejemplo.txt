@@ -1,1 +1,3 @@
-nueva prueva para subir archivo en un repositorio compartido:
+nueva prueva para subir archivo en un repositorio compartido
+
+Mi compañero jesus se a integrado a este proyecto
