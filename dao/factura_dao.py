@@ -1,66 +1,110 @@
 from database.conexion import Conexion
-from models.factura import Factura
+
 
 class FacturaDAO:
 
+    def generar_facturas_faltantes(self):
+
+        conexion = None
+        cursor = None
+
+        try:
+            conexion = Conexion.obtener_conexion()
+
+            if conexion is None:
+                return 0
+
+            cursor = conexion.cursor()
+
+            cursor.execute("""
+                INSERT INTO facturas(
+                    id_venta,
+                    id_cliente,
+                    fecha_factura,
+                    folio,
+                    estado
+                )
+                SELECT
+                    v.id_venta,
+                    v.id_cliente,
+                    CURRENT_DATE,
+                    'SH-' || LPAD(
+                        v.id_venta::TEXT,
+                        6,
+                        '0'
+                    ),
+                    'Emitida'
+                FROM ventas v
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM facturas f
+                    WHERE f.id_venta = v.id_venta
+                )
+            """)
+
+            cantidad = cursor.rowcount
+
+            conexion.commit()
+
+            return cantidad
+
+        except Exception as error:
+
+            if conexion is not None:
+                conexion.rollback()
+
+            print("Error al generar facturas:")
+            print(error)
+
+            return 0
+
+        finally:
+
+            if cursor is not None:
+                cursor.close()
+
+            if conexion is not None:
+                conexion.close()
+
     def obtener_facturas(self):
-        conexion = Conexion.obtener_conexion()
-        cursor = conexion.cursor()
-        cursor.execute("""
-            SELECT id_factura, fecha_factura, subtotal, iva, total, metodo_pago, estado, id_usuario 
-            FROM facturas 
-            ORDER BY id_factura
-        """)
-        registros = cursor.fetchall()
 
-        facturas = []
-        for reg in registros:
-            fac = Factura(
-                id_factura=reg[0],
-                fecha_factura=reg[1],
-                subtotal=reg[2],
-                iva=reg[3],
-                total=reg[4],
-                metodo_pago=reg[5],
-                estado=reg[6],
-                id_usuario=reg[7]
-            )
-            facturas.append(fac)
-            
-        cursor.close()
-        conexion.close()
-        return facturas
-    
-    def insertar(self, factura):
-        conexion = Conexion.obtener_conexion()
-        cursor = conexion.cursor()
-        
-        # Usamos RETURNING para capturar el ID generado automáticamente por la BD
-        sql = """
-        INSERT INTO facturas(fecha_factura, subtotal, iva, total, metodo_pago, estado, id_usuario)
-        VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id_factura
-        """
-        cursor.execute(sql, (
-            factura.fecha_factura,
-            factura.subtotal,
-            factura.iva,
-            factura.total,
-            factura.metodo_pago,
-            factura.estado,
-            factura.id_usuario
-        ))
-        
-        id_generado = cursor.fetchone()[0]
-        conexion.commit()
-        cursor.close()
-        conexion.close()
-        return id_generado
+        try:
+            conexion = Conexion.obtener_conexion()
 
-    def cambiar_estado(self, id_factura, nuevo_estado):
-        conexion = Conexion.obtener_conexion()
-        cursor = conexion.cursor()
-        sql = "UPDATE facturas SET estado = %s WHERE id_factura = %s"
-        cursor.execute(sql, (nuevo_estado, id_factura))
-        conexion.commit()
-        cursor.close()
-        conexion.close()
+            if conexion is None:
+                return []
+
+            cursor = conexion.cursor()
+
+            cursor.execute("""
+                SELECT
+                    f.id_factura,
+                    f.folio,
+                    f.fecha_factura,
+                    f.id_venta,
+                    c.nombre,
+                    v.subtotal,
+                    v.iva,
+                    v.total,
+                    v.metodo_pago,
+                    f.estado
+                FROM facturas f
+                INNER JOIN ventas v
+                    ON v.id_venta = f.id_venta
+                INNER JOIN clientes c
+                    ON c.id_cliente = f.id_cliente
+                ORDER BY f.id_factura DESC
+            """)
+
+            facturas = cursor.fetchall()
+
+            cursor.close()
+            conexion.close()
+
+            return facturas
+
+        except Exception as error:
+            print("Error al consultar facturas:")
+            print(error)
+
+            return []
