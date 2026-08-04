@@ -1,17 +1,28 @@
+import os
 import psycopg2
 
-def obtener_conexion():
-    try:
-        conexion = psycopg2.connect(
-            host="localhost",
-            database="tienda_shecsper",  # <--- Cambiado al nombre real que tienes en pgAdmin
-            user="postgres",
-            password="141819",       # <--- Pon aquí tu contraseña de pgAdmin
-            port="5432"
-        )
-        # Aseguramos codificación UTF-8
-        conexion.set_client_encoding('UTF8')
-        return conexion
-    except Exception as e:
-        print(f"Error crítico al conectar con la base de datos: {repr(e)}")
-        return None
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+class Conexion:
+
+    @staticmethod
+    def obtener_conexion():
+        try:
+            conexion = psycopg2.connect(
+                host=os.getenv("DB_HOST"),
+                database=os.getenv("DB_NAME"),
+                user=os.getenv("DB_USER"),
+                password=os.getenv("DB_PASSWORD"),
+                port=os.getenv("DB_PORT")
+            )
+
+            return conexion
+
+        except Exception as error:
+            print("Error al conectar con PostgreSQL:")
+            print(error)
+
+            return None
