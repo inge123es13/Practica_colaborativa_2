@@ -20,5 +20,5 @@ class DetalleVenta:
             f"Venta: {self.id_venta} - "
             f"Producto: {self.id_producto} - "
             f"Cantidad: {self.cantidad} - "
-            f"Subtotal: ${self.subtotal:.2f}"
+            f"Subtotal: ${self.subtotal}"
         )

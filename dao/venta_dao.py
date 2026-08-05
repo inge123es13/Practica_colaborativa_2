@@ -1,220 +1,210 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from database.conexion import Conexion
+from models.venta import Venta
 
 
 class VentaDAO:
 
     def obtener_ventas(self):
-
-        try:
-            conexion = Conexion.obtener_conexion()
-
-            if conexion is None:
-                return []
-
-            cursor = conexion.cursor()
-
-            cursor.execute("""
-                SELECT
-                    v.id_venta,
-                    v.fecha_venta,
-                    u.nombre,
-                    c.nombre,
-                    COALESCE(p.nombre, 'Sin producto'),
-                    v.cantidad,
-                    v.precio_unitario,
-                    v.total,
-                    v.metodo_pago,
-                    v.estado
-                FROM ventas v
-                INNER JOIN usuarios u
-                    ON u.id_usuario = v.id_usuario
-                INNER JOIN clientes c
-                    ON c.id_cliente = v.id_cliente
-                LEFT JOIN productos p
-                    ON p.id_producto = v.id_producto
-                ORDER BY v.id_venta DESC
-            """)
-
-            ventas = cursor.fetchall()
-
-            cursor.close()
-            conexion.close()
-
-            return ventas
-
-        except Exception as error:
-            print("Error al consultar ventas:")
-            print(error)
-
-            return []
-
-    def registrar(self, venta):
-
         conexion = None
         cursor = None
 
         try:
             conexion = Conexion.obtener_conexion()
-
-            if conexion is None:
-                raise Exception(
-                    "No fue posible conectar con PostgreSQL"
-                )
-
             cursor = conexion.cursor()
 
-            # Obtener y bloquear el producto
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT
-                    precio,
-                    stock_actual
-                FROM productos
-                WHERE id_producto = %s
-                FOR UPDATE
-                """,
-                (venta.id_producto,)
-            )
-
-            producto = cursor.fetchone()
-
-            if producto is None:
-                raise ValueError(
-                    "El producto seleccionado no existe"
-                )
-
-            precio_unitario = producto[0]
-            stock_actual = producto[1]
-
-            if venta.cantidad <= 0:
-                raise ValueError(
-                    "La cantidad debe ser mayor que cero"
-                )
-
-            if venta.cantidad > stock_actual:
-                raise ValueError(
-                    f"Stock insuficiente. "
-                    f"Existencias disponibles: {stock_actual}"
-                )
-
-            # Calcular los importes
-            subtotal = (
-                precio_unitario * venta.cantidad
-            )
-
-            iva = (
-                subtotal * Decimal("0.16")
-            )
-
-            total = subtotal + iva
-
-            # Registrar la venta
-            cursor.execute(
-                """
-                INSERT INTO ventas(
+                    id_venta,
                     id_usuario,
                     id_cliente,
                     fecha_venta,
                     metodo_pago,
-                    subtotal,
                     iva,
                     total,
-                    estado,
-                    id_producto,
-                    cantidad,
-                    precio_unitario
+                    estado
+                FROM ventas
+                ORDER BY id_venta DESC
+            """)
+
+            registros = cursor.fetchall()
+            ventas = []
+
+            for registro in registros:
+                venta = Venta(
+                    id_venta=registro[0],
+                    id_usuario=registro[1],
+                    id_cliente=registro[2],
+                    fecha_venta=registro[3],
+                    metodo_pago=registro[4],
+                    iva=registro[5],
+                    total=registro[6],
+                    estado=registro[7]
                 )
-                VALUES (
-                    %s,
-                    %s,
-                    CURRENT_DATE,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s
+
+                ventas.append(venta)
+
+            return ventas
+
+        except Exception as error:
+            print(f"Error al obtener las ventas: {error}")
+            return []
+
+        finally:
+            if cursor is not None:
+                cursor.close()
+
+            if conexion is not None:
+                conexion.close()
+
+    def registrar_venta(self, venta, detalles):
+        conexion = None
+        cursor = None
+
+        try:
+            if not detalles:
+                raise ValueError(
+                    "La venta debe contener por lo menos un producto."
                 )
-                RETURNING id_venta
-                """,
-                (
-                    venta.id_usuario,
-                    venta.id_cliente,
-                    venta.metodo_pago,
-                    subtotal,
-                    iva,
-                    total,
-                    venta.estado,
-                    venta.id_producto,
-                    venta.cantidad,
-                    precio_unitario
+
+            conexion = Conexion.obtener_conexion()
+            cursor = conexion.cursor()
+
+            detalles_calculados = []
+            subtotal_general = Decimal("0.00")
+
+            # Validar productos, obtener precios y bloquear el stock
+            for detalle in detalles:
+
+                if detalle.cantidad <= 0:
+                    raise ValueError(
+                        "La cantidad debe ser mayor que cero."
+                    )
+
+                cursor.execute("""
+                    SELECT precio, stock_actual
+                    FROM productos
+                    WHERE id_producto = %s
+                    FOR UPDATE
+                """, (detalle.id_producto,))
+
+                producto = cursor.fetchone()
+
+                if producto is None:
+                    raise ValueError(
+                        f"No existe el producto {detalle.id_producto}."
+                    )
+
+                precio = Decimal(str(producto[0]))
+                stock_actual = producto[1]
+
+                if stock_actual < detalle.cantidad:
+                    raise ValueError(
+                        f"Stock insuficiente para el producto "
+                        f"{detalle.id_producto}. "
+                        f"Disponible: {stock_actual}."
+                    )
+
+                subtotal = (
+                    precio * Decimal(detalle.cantidad)
+                ).quantize(
+                    Decimal("0.01"),
+                    rounding=ROUND_HALF_UP
                 )
+
+                detalle.subtotal = subtotal
+                subtotal_general += subtotal
+
+                detalles_calculados.append(detalle)
+
+            # Calcular IVA y total general
+            iva = (
+                subtotal_general * Decimal("0.16")
+            ).quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP
             )
 
-            id_venta = cursor.fetchone()[0]
+            total = subtotal_general + iva
 
-            # Descontar las existencias
-            cursor.execute(
-                """
-                UPDATE productos
-                SET stock_actual = stock_actual - %s
-                WHERE id_producto = %s
-                """,
-                (
-                    venta.cantidad,
-                    venta.id_producto
-                )
-            )
+            venta.iva = iva
+            venta.total = total
 
-            # Crear el folio de la factura
-            folio = f"SH-{id_venta:06d}"
-
-            # Generar la factura
-            cursor.execute(
-                """
-                INSERT INTO facturas(
-                    id_venta,
+            # Registrar encabezado de la venta
+            cursor.execute("""
+                INSERT INTO ventas (
+                    id_usuario,
                     id_cliente,
-                    fecha_factura,
-                    folio,
+                    fecha_venta,
+                    metodo_pago,
+                    iva,
+                    total,
                     estado
                 )
-                VALUES (
-                    %s,
-                    %s,
-                    CURRENT_DATE,
-                    %s,
-                    %s
-                )
-                """,
-                (
-                    id_venta,
-                    venta.id_cliente,
-                    folio,
-                    "Emitida"
-                )
-            )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id_venta
+            """, (
+                venta.id_usuario,
+                venta.id_cliente,
+                venta.fecha_venta,
+                venta.metodo_pago,
+                venta.iva,
+                venta.total,
+                venta.estado
+            ))
 
-            # Guardar venta, stock y factura juntos
+            id_venta = cursor.fetchone()[0]
+            venta.id_venta = id_venta
+
+            # Registrar productos y descontar existencias
+            for detalle in detalles_calculados:
+                detalle.id_venta = id_venta
+
+                cursor.execute("""
+                    INSERT INTO detalle_venta (
+                        id_venta,
+                        id_producto,
+                        cantidad,
+                        subtotal
+                    )
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id_detalle
+                """, (
+                    detalle.id_venta,
+                    detalle.id_producto,
+                    detalle.cantidad,
+                    detalle.subtotal
+                ))
+
+                detalle.id_detalle = cursor.fetchone()[0]
+
+                cursor.execute("""
+                    UPDATE productos
+                    SET stock_actual = stock_actual - %s
+                    WHERE id_producto = %s
+                """, (
+                    detalle.cantidad,
+                    detalle.id_producto
+                ))
+
             conexion.commit()
 
             return id_venta
 
         except Exception as error:
-
             if conexion is not None:
                 conexion.rollback()
 
             raise error
 
         finally:
-
             if cursor is not None:
                 cursor.close()
 
             if conexion is not None:
                 conexion.close()
+
+    # Permite seguir utilizando venta_dao.insertar(...)
+    def insertar(self, venta, detalles):
+        return self.registrar_venta(venta, detalles)
